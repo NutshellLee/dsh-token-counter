@@ -1,0 +1,4 @@
+# 运行状态：含本机大模型用量记录（每次增量 + 每日合计），不要提交
+state.json
+token-counter.log
+*.log
