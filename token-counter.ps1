@@ -23,6 +23,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $Root      = Split-Path -Parent $MyInvocation.MyCommand.Path
 $StatePath = Join-Path $Root 'state.json'
+$BakPath   = Join-Path $Root 'state.bak.json'
 $CacheDir  = Join-Path $env:USERPROFILE '.dsh\storages\session_projcache\sessions'
 
 function Write-Log([string]$m) {
@@ -49,13 +50,26 @@ function Read-SessionTotals([string]$path) {
 }
 
 function Load-State {
-  if (Test-Path $StatePath) { try { return (Get-Content $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json) } catch {} }
-  return $null
+  if (-not (Test-Path $StatePath)) { return $null }
+  try {
+    return (Get-Content $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json)
+  } catch {
+    # 关键：文件读不出来（被写到一半、被截断）**不等于**第一次运行。
+    # 以前这里静静地返回 null，于是程序当成新装、建一个空的，然后立刻把空的覆盖回去，
+    # 历史就这么整块没了。所以现在：留下残骸、大声记一笔。
+    $bad = "$StatePath.corrupt-$(Get-Date -Format 'yyyyMMdd-HHmmss').json"
+    try { Move-Item -Path $StatePath -Destination $bad -Force } catch {}
+    Write-Log "state unreadable -> kept as $(Split-Path $bad -Leaf); trying the backup: $($_.Exception.Message)"
+    return $null
+  }
 }
 
 function Save-State($s) {
+  # 先写临时文件再替换：直接覆盖写的话，进程在写的那一刻被杀掉就会留下半个文件
   $json = $s | ConvertTo-Json -Depth 6 -Compress
-  [System.IO.File]::WriteAllText($StatePath, $json, (New-Object System.Text.UTF8Encoding($false)))
+  $tmp = "$StatePath.tmp"
+  [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding($false)))
+  Move-Item -Path $tmp -Destination $StatePath -Force
 }
 
 function New-EmptyUsage { return [pscustomobject]@{ in = [int64]0; out = [int64]0; cache = [int64]0; write = [int64]0 } }
@@ -203,6 +217,10 @@ function Initialize-WinForms {
 # 下面要用 System.Drawing 的类型，先把程序集加载进来（不加载会报找不到类型）
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+# 查鼠标左键此刻是不是按着：用来判断「点到面板外面了」
+Add-Type -Namespace TokenUi -Name Keys -MemberDefinition @'
+[DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
+'@ -ErrorAction SilentlyContinue
 
 $script:UiBg    = [System.Drawing.Color]::FromArgb(255, 249, 250, 251)
 $script:UiText  = [System.Drawing.Color]::FromArgb(255, 28, 32, 38)
@@ -221,6 +239,8 @@ function Get-UiFonts {
     $script:FSub   = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
     $script:FApp   = New-Object System.Drawing.Font 'Microsoft YaHei UI', 9
     $script:FTiny  = New-Object System.Drawing.Font 'Microsoft YaHei UI', 7.5
+    # 关闭按钮单独一个大字号，原来那个 × 太小
+    $script:FClose = New-Object System.Drawing.Font 'Microsoft YaHei UI', 14, ([System.Drawing.FontStyle]::Regular)
   }
 }
 
@@ -250,6 +270,25 @@ function Get-PanelUsage($state, [datetime]$now, [int]$rng) {
     $acc.write = [int64]$acc.write + [int64]$u.write
   }
   return $acc
+}
+
+# 自绘面板必须开双缓冲，不然定时重画时整块会闪一下。
+# DoubleBuffered 是受保护的属性，直接赋值得反射；用 Control.SetStyle 更稳。
+function Set-PanelDoubleBuffer($form) {
+  try {
+    $styles = [int]([System.Windows.Forms.ControlStyles]::UserPaint)
+    $styles = $styles -bor [int]([System.Windows.Forms.ControlStyles]::AllPaintingInWmPaint)
+    $styles = $styles -bor [int]([System.Windows.Forms.ControlStyles]::OptimizedDoubleBuffer)
+    $styles = $styles -bor [int]([System.Windows.Forms.ControlStyles]::Opaque)
+    $m = [System.Windows.Forms.Control].GetMethod('SetStyle', [System.Reflection.BindingFlags]'NonPublic,Instance')
+    [void]$m.Invoke($form, @([System.Windows.Forms.ControlStyles]$styles, $true))
+  } catch { Write-Log "double buffer unavailable: $($_.Exception.Message)" }
+}
+
+# 面板高度：底部那排柱子只有「近 7 天」才有，别的栏不留那块空的
+function Get-TokenPanelHeight([int]$rng) {
+  if ($rng -eq 2) { return (176 + 4 * 24 + 78) }
+  return (176 + 4 * 24 + 16)
 }
 
 function Draw-Panel($g, [int]$w, [int]$h) {
@@ -286,6 +325,10 @@ function Draw-Panel($g, [int]$w, [int]$h) {
     }
     $tx += [int]$sz.Width + 18
   }
+
+  # 右上角关闭按钮
+  $g.DrawString('×', $script:FClose, $bMuted, ($w - 30), 2)
+  $script:PanelCloseRect = [pscustomobject]@{ x = ($w - 40); y = 0; w = 36; h = 34 }
 
   # ---- 大字号：合计
   $big = Format-N $tot
@@ -343,30 +386,52 @@ function Draw-Panel($g, [int]$w, [int]$h) {
     $y += 24
   }
 
-  # ---- 底部：近 7 天每天一根竖条
-  $baseY = $h - 40
-  $dayW = [int](($w - 32) / 7)
-  $vals = @()
-  $maxD = [int64]1
-  for ($i = 6; $i -ge 0; $i--) {
-    $dd = $now.AddDays(-$i)
-    $du = Get-DayUsage $st (Get-DayKey $dd)
-    $dv = [int64]$du.in + [int64]$du.out + [int64]$du.cache
-    $vals += [pscustomobject]@{ d = $dd; v = $dv }
-    if ($dv -gt $maxD) { $maxD = $dv }
-  }
-  $idx = 0
-  foreach ($v in $vals) {
-    $bx = 16 + $idx * $dayW
-    $bh2 = [int](28 * $v.v / $maxD)
-    if ($bh2 -lt 1 -and $v.v -gt 0) { $bh2 = 1 }
-    if ($bh2 -gt 0) {
-      $gp = New-RoundRect ($bx + 6) ($baseY + 24 - $bh2) ($dayW - 14) $bh2 3
-      $b = New-Object System.Drawing.SolidBrush $(if ($idx -eq 6) { $script:UiWork } else { [System.Drawing.Color]::FromArgb(255, 150, 175, 235) })
-      $g.FillPath($b, $gp); $b.Dispose(); $gp.Dispose()
+  # ---- 底部：只有「近 7 天」这一栏画每天一根竖条。
+  # 今天/昨天底下不放它：那两栏讲的是当天，摆一周的柱子只是占地方。
+  # 鼠标停在哪根上，那根高亮，并在它上方写出日期和数字。
+  $script:BarRects = @()
+  if ($rng -eq 2) {
+    $baseY = $h - 40
+    $dayW = [int](($w - 32) / 7)
+    $vals = @()
+    $maxD = [int64]1
+    for ($i = 6; $i -ge 0; $i--) {
+      $dd = $now.AddDays(-$i)
+      $du = Get-DayUsage $st (Get-DayKey $dd)
+      $dv = [int64]$du.in + [int64]$du.out + [int64]$du.cache
+      $vals += [pscustomobject]@{ d = $dd; v = $dv }
+      if ($dv -gt $maxD) { $maxD = $dv }
     }
-    $g.DrawString($v.d.ToString('MM-dd'), $script:FTiny, $bMuted, ($bx + 2), ($baseY + 26))
-    $idx++
+    $idx = 0
+    foreach ($v in $vals) {
+      $bx = 16 + $idx * $dayW
+      $bh2 = [int](28 * $v.v / $maxD)
+      if ($bh2 -lt 1 -and $v.v -gt 0) { $bh2 = 1 }
+      $hot = ([int]$script:PanelBarHover -eq $idx)
+      if ($bh2 -gt 0) {
+        $gp = New-RoundRect ($bx + 6) ($baseY + 24 - $bh2) ($dayW - 14) $bh2 3
+        $bc = if ($hot) { $script:UiFun } elseif ($idx -eq 6) { $script:UiWork } else { [System.Drawing.Color]::FromArgb(255, 150, 175, 235) }
+        $b = New-Object System.Drawing.SolidBrush $bc
+        $g.FillPath($b, $gp); $b.Dispose(); $gp.Dispose()
+      }
+      $bt = New-Object System.Drawing.SolidBrush $(if ($hot) { $script:UiText } else { $script:UiMuted })
+      $g.DrawString($v.d.ToString('MM-dd'), $script:FTiny, $bt, ($bx + 2), ($baseY + 26))
+      $bt.Dispose()
+      $script:BarRects += [pscustomobject]@{ i = $idx; x = $bx; w = $dayW }
+      $idx++
+    }
+    $hv = [int]$script:PanelBarHover
+    if ($hv -ge 0 -and $hv -lt $vals.Count) {
+      $one = $vals[$hv]
+      $htxt = $one.d.ToString('MM-dd') + '  ' + (Format-N $one.v)
+      $hb = New-Object System.Drawing.SolidBrush $script:UiText
+      $hw = $g.MeasureString($htxt, $script:FTiny).Width
+      $hx = 16 + $hv * $dayW + ($dayW - $hw) / 2
+      if ($hx -lt 16) { $hx = 16 }
+      if ($hx + $hw -gt ($w - 8)) { $hx = $w - 8 - $hw }
+      $g.DrawString($htxt, $script:FTiny, $hb, [single]$hx, [single]($baseY - 14))
+      $hb.Dispose()
+    }
   }
   $bText.Dispose(); $bMuted.Dispose()
 }
@@ -377,9 +442,13 @@ function Show-Panel($state, [datetime]$now) {
     if ($script:PanelForm -and -not $script:PanelForm.IsDisposed) { $script:PanelForm.Close() }
     $script:PanelRange = 0
     $script:PanelReady = $false
-    $w = 420
-    $h = 176 + 4 * 24 + 78
+    $script:PanelBarHover = -1
+    $script:BarRects = @()
+    $script:PanelHold = $false
+    $w = 520
+    $h = Get-TokenPanelHeight 0
     $f = New-Object System.Windows.Forms.Form
+    Set-PanelDoubleBuffer $f
     $f.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
     $f.ShowInTaskbar = $false
     $f.TopMost = $true
@@ -391,13 +460,35 @@ function Show-Panel($state, [datetime]$now) {
     $f.Add_Paint({ param($s, $e) Draw-Panel $e.Graphics $s.ClientSize.Width $s.ClientSize.Height })
     $f.Add_MouseClick({
       param($s, $e)
+      $cr = $script:PanelCloseRect
+      if ($cr -and $e.X -ge $cr.x -and $e.X -le ($cr.x + $cr.w) -and $e.Y -ge $cr.y -and $e.Y -le ($cr.y + $cr.h)) { $s.Close(); return }
       foreach ($t in $script:TabRects) {
         if ($e.Y -ge 8 -and $e.Y -le 34 -and $e.X -ge $t.x -and $e.X -le ($t.x + $t.w + 8)) {
           $script:PanelRange = $t.i
+          # 高度跟着栏目走：底部那排柱子只有近 7 天才有，别在别处留一块空的
+          $nh = Get-TokenPanelHeight $t.i
+          $s.ClientSize = New-Object System.Drawing.Size 520, $nh
+          $wa2 = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+          $s.Location = New-Object System.Drawing.Point (($wa2.Right - 520 - 10), ($wa2.Bottom - $nh - 10))
           $s.Invalidate()
           return
         }
       }
+    })
+    $f.Add_MouseDown({ param($s, $e) if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { $script:PanelHold = $true } })
+    $f.Add_MouseUp({ param($s, $e) $script:PanelHold = $false })
+    # 底部柱子：鼠标进来就高亮那一根，并把它的日期和数字写在上面
+    $f.Add_MouseMove({
+      param($s, $e)
+      $hot = -1
+      foreach ($br in @($script:BarRects)) {
+        if ($e.Y -ge ($s.ClientSize.Height - 58) -and $e.X -ge $br.x -and $e.X -lt ($br.x + $br.w)) { $hot = [int]$br.i; break }
+      }
+      if ($hot -ne [int]$script:PanelBarHover) { $script:PanelBarHover = $hot; $s.Invalidate() }
+    })
+    $f.Add_MouseLeave({
+      param($s, $e)
+      if ([int]$script:PanelBarHover -ne -1) { $script:PanelBarHover = -1; $s.Invalidate() }
     })
     # 点别处收起来；延迟半秒再武装，免得菜单刚关掉时的那次失焦把它关掉
     $f.Add_Shown({
@@ -406,9 +497,52 @@ function Show-Panel($state, [datetime]$now) {
       $script:PanelArm.Add_Tick({ $script:PanelArm.Stop(); $script:PanelReady = $true })
       $script:PanelArm.Start()
     })
-    $f.Add_Deactivate({ if ($script:PanelReady -and $script:PanelForm -and -not $script:PanelForm.IsDisposed) { $script:PanelForm.Close() } })
-    $f.Add_KeyDown({ param($s, $e) if ($e.KeyCode -eq 'Escape') { $s.Close() } })
+    $f.Add_KeyDown({ param($s, $e) if ($e.KeyCode -eq 'Escape' -or $e.KeyCode -eq 'Space') { $s.Close() } })
+    # 关闭方式：**只有点到面板外面才关**。以前挂在 Deactivate 上，一切换焦点就关，
+    # 想看一眼、截个图都来不及。这里每 150 毫秒看一眼鼠标左键是不是按在面板外。
+    $script:PanelWatch = New-Object System.Windows.Forms.Timer
+    $script:PanelWatch.Interval = 150
+    $script:PanelWatch.Add_Tick({
+      try {
+        if (-not $script:PanelForm -or $script:PanelForm.IsDisposed) { $script:PanelWatch.Stop(); return }
+        $r = $script:PanelForm.RectangleToScreen($script:PanelForm.ClientRectangle)
+        $pos = [System.Windows.Forms.Cursor]::Position
+        $inside = ($pos.X -ge $r.Left -and $pos.X -le $r.Right -and $pos.Y -ge $r.Top -and $pos.Y -le $r.Bottom)
+        # 别的工具后来开了明细面板，就先把我的收起来，只留一个
+        try {
+          $ownerFile = Join-Path $env:TEMP 'dsh-tray-panel.owner'
+          if (Test-Path $ownerFile) {
+            $parts = (Get-Content $ownerFile -Raw -ErrorAction SilentlyContinue).Trim() -split '\|'
+            if ($parts.Count -eq 2 -and $parts[0] -ne 'dsh-token-counter') {
+              if ([long]$parts[1] -gt [long]$script:PanelOpenedAt) { $script:PanelForm.Close(); return }
+            }
+          }
+        } catch {}
+        # 面板开着时每 13 次心跳（约 2 秒）核一次数字：数字变了才重画，没变就不碰屏幕。
+        $script:PanelTickN = [int]$script:PanelTickN + 1
+        if (($script:PanelTickN % 13) -eq 0) {
+          $tu = Get-PanelUsage $script:State (Get-Date) ([int]$script:PanelRange)
+          $tsig = "$($script:PanelRange)|$($tu.in)|$($tu.out)|$($tu.cache)|$($tu.write)"
+          if ($tsig -ne [string]$script:PanelSig) { $script:PanelSig = $tsig; $script:PanelForm.Invalidate() }
+        }
+        # 任务栏/托盘那一带不算「点到别处」：不然点托盘图标开面板时，按下的那一刻就被
+        # 判成点在面板外，面板先关一次再被点开，看着就是「闪一下又弹出来」。
+        $waNow = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+        $onTaskbar = ($pos.Y -gt $waNow.Bottom -or $pos.Y -lt $waNow.Top -or $pos.X -gt $waNow.Right -or $pos.X -lt $waNow.Left)
+        $downNow = ([TokenUi.Keys]::GetAsyncKeyState(0x01) -band 0x8000) -ne 0
+        if (-not $downNow) { $script:PanelHold = $false }
+        # 在面板里按下去再拖到面板外松手不算「点别处」，否则拖滚动条手滑出边界就会把面板关掉
+        if (-not $inside -and -not $onTaskbar -and -not $script:PanelHold -and $downNow) {
+          $script:PanelForm.Close()
+        }
+      } catch {}
+    })
+    $script:PanelWatch.Start()
+    $script:PanelTickN = 0
     $script:PanelForm = $f
+    # 三个工具的明细面板同一时刻只留一个，别在右下角叠成一摞
+    $script:PanelOpenedAt = [DateTime]::UtcNow.Ticks
+    try { [System.IO.File]::WriteAllText((Join-Path $env:TEMP 'dsh-tray-panel.owner'), "dsh-token-counter|$($script:PanelOpenedAt)") } catch {}
     $f.Show()
     $f.Activate()
   } catch { Write-Log "panel failed: $($_.Exception.Message) @ line $($_.InvocationInfo.ScriptLineNumber)" }
@@ -445,6 +579,18 @@ function Start-Tray {
   $miExit   = $menu.Items.Add('退出')
   $script:Ni.ContextMenuStrip = $menu
 
+  # 左键单击托盘图标开明细。已经开着就什么都不做——不重开也不收起来，
+  # 免得点一下先收再弹、看着像闪了一下。收起还是靠点面板外或右上角的叉。
+  $script:Ni.Add_MouseClick({
+    param($s, $e)
+    if ($e.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
+    try {
+      if ($script:PanelForm -and -not $script:PanelForm.IsDisposed) { return }
+      Update-Tray
+      Show-Panel $script:State (Get-Date)
+    } catch { Write-Log "left click failed: $($_.Exception.Message)" }
+  })
+
   $miDetail.Add_Click({ Update-Tray; Show-Panel $script:State (Get-Date) })
   # 只重读，不弹窗：跟「明细」分工明确，也和视频计数器那个保持一致
   $miNow.Add_Click({ Update-Tray })
@@ -468,6 +614,16 @@ function Start-Tray {
 # ---------------------------------------------------------------- 入口
 
 $state = Load-State
+# 状态读不出来时，先试着用上一次的备份救回来
+if ($null -eq $state -and (Test-Path $BakPath)) {
+  try {
+    $bak = Get-Content $BakPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($bak -and $bak.PSObject.Properties['days']) {
+      $state = $bak
+      Write-Log 'state missing or unreadable -> restored from state.bak.json'
+    }
+  } catch { Write-Log "backup unreadable: $($_.Exception.Message)" }
+}
 if ($null -eq $state) { $state = New-State }
 foreach ($f in 'sessions','days') {
   if (-not $state.PSObject.Properties[$f]) { $state | Add-Member -NotePropertyName $f -NotePropertyValue ([pscustomobject]@{}) }
@@ -493,6 +649,11 @@ if ($bad.Count -gt 0) {
   }
   Write-Log "merged $merged malformed day keys back into yyyy-MM-dd"
   Save-State $state
+}
+
+# 每次启动留一份上一版的备份。只在这份确实有内容时才覆盖，免得把好备份冲成空的。
+if ((Test-Path $StatePath) -and (@($state.days.PSObject.Properties).Count -gt 0)) {
+  try { Copy-Item -Path $StatePath -Destination $BakPath -Force } catch { Write-Log "backup failed: $($_.Exception.Message)" }
 }
 
 if ($Once) {
