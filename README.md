@@ -1,209 +1,249 @@
-# 大模型 token 用量计数器（DSH）
+# LLM Token Counter (DSH)
 
-DeepSeek Harness 里能看到当前会话的用量，但看不到**今天一共用掉多少、昨天又是多少**。
-这个小工具把它变成 Windows 托盘上的一个数字。
+**English** ｜ [简体中文](README.zh-CN.md)
 
-版本 1.0 ｜ MIT 许可（见 [LICENSE](LICENSE)）｜ 个人自用工具，不保证适配你的环境
+DeepSeek Harness shows you the usage of the current session, but not **how much you burned today, or how much yesterday**.
+This little tool turns that into a single number in the Windows system tray.
+
+![Details panel (today)](docs/screenshot-today.png)
+
+**Illustration only: the numbers in the screenshot are sample data, not anyone's actual usage.**
+
+**Who it's for**: anyone working with DeepSeek Harness who wants to know how many tokens today and yesterday used.
+
+**Why keep it in the tray**
+
+- **Entirely local and read-only**: it reads the usage cache DSH keeps on this machine. No network, and nothing in DSH is touched.
+- **No admin rights, no runtime**: double-click the launcher and it runs.
+- **One number is enough**: the tray shows today's total, and hovering gives today and yesterday.
+- **Broken down**: input, output, cache reads and cache writes are listed separately, so the cache-read figure does not overwhelm you.
+
+Version 1.0 ｜ MIT license (see [LICENSE](LICENSE)) ｜ A personal tool; no promise it fits your setup
 
 ---
 
-## 它长什么样
+## What it looks like
 
-- **图标**：偏绿的小圆圈，里面是今天的总用量。图标里那个数字单位是「万」，
-  最多显示到 9999（也就是九千九百九十九万），再大就停在 9999。
-- **鼠标悬停**会弹出三行：第一行是标题，第二行是今天的用量，第三行是昨天的。
-  数字会自动换单位，小的时候用「万」，大了用「亿」。
-- **右键菜单**：
+- **Icon**: a greenish circle showing today's total. The number inside is in units of 10,000 ("万"),
+  capped at 9999 (i.e. ninety-nine million and change); anything larger stays at 9999.
+  ![Icon](docs/icon.png)
+- **Hovering** shows three lines: the title, today's usage, and yesterday's. The unit adapts:
+  10,000s when small, 100 millions ("亿") when large.
+  ![Tray icon and hover tooltip](docs/tray-tooltip.png)
 
-| 菜单项 | 作用 |
+- **Right-click menu**:
+
+| Item | What it does |
 | --- | --- |
-| 明细 | 从右下角弹出一张面板，点别的地方自动收起 |
-| 立即刷新 | 马上重新读一次（不弹窗） |
-| 打开所在文件夹 | 打开本工具所在的文件夹 |
-| 退出 | 结束程序 |
+| Details | Pops up a panel from the bottom-right; clicking elsewhere dismisses it |
+| Refresh now | Reads again immediately (no popup) |
+| Open folder | Opens the folder the tool lives in |
+| Exit | Quits |
 
-托盘图标左键单击就能打开明细，已经开着的时候再点它不会有反应（不会闪一下又弹出来）；要收起就点面板外面，或者点右上角的叉。右键菜单里是同一套功能。
+A left click on the tray icon also opens the details panel; clicking again while it is already open does nothing
+(it will not flash and pop again). To dismiss it, click outside the panel or hit the × in its top-right corner.
+The right-click menu offers the same actions.
 
-### 明细面板
+### The details panel
 
-打开就是一张图，不用读文字：
+It is meant to be read as a picture, not as text:
 
-- 左上角三个标签切换**今天 / 昨天 / 近 7 天**，默认是今天。
-- 中间一行大字是这段时间的合计用量，下面小字写输入、输出、缓存读取各多少。
-- 再下面一条三段色条，输入是蓝色、输出是橙色、缓存读取是绿色，按比例分。
-- 然后是**明细**四项：输入 / 输出 / 缓存读取 / 缓存写入，每项一条横条按时长比例画，右边是数字。
-- 最下面是**近 7 天**每天一根竖条，条高是那天的合计，今天那根是深色的。这排柱子只在「近 7 天」这一栏才有；鼠标停在某一根上，它会高亮并显示那天的日期和数字。
+- Three tabs at the top switch between **Today / Yesterday / Last 7 days**; Today is the default.
+- The big number in the middle is the total for that period; the small line under it splits it into input, output and cache reads.
+- Below that, a three-part colour bar: input blue, output orange, cache reads green, drawn in proportion.
+- Then the **breakdown** in four rows: input / output / cache reads / cache writes, each with a bar and the number on the right.
+- At the bottom, **Last 7 days** draws one bar per day, its height being that day's total, with today in a darker shade.
+  Only the "Last 7 days" tab shows this strip; hovering a bar highlights it and shows that day's date and number.
 
-## 装之前需要什么
+![Last 7 days](docs/screenshot-week.png)
 
-- Windows 10 或 11（自带 PowerShell 5.1 和 .NET Framework，所以不用装运行库）
-- 已经装过 DeepSeek Harness（DSH），并且至少用过一次。它读的是 DSH 在本机存的用量数据
-- 不需要管理员权限，不需要改 PowerShell 执行策略，不需要联网
+## Requirements
 
-没装 DSH 会怎样：图标照样会出现，但数字一直是 0。
+- Windows 10 or 11 (PowerShell 5.1 and .NET Framework are built in, so there is no runtime to install)
+- DeepSeek Harness (DSH) installed and used at least once — this reads the usage data DSH keeps on your machine
+- No administrator rights, no change to the PowerShell execution policy, no internet access
 
-## 怎么装
+If DSH is not installed: the icon still appears, but the number stays at 0.
 
-1. **先解压、再解锁**，这一步别跳。
-   - 不要在压缩包窗口里直接双击运行，那样会解到临时目录，路径全乱。先把整个文件夹解压到硬盘上。
-   - 从网上下载来的文件，Windows 会标记来源，不解锁的话双击会弹「Windows 已保护你的电脑」。
-     做法：进到文件夹，全选所有文件 → 右键 → 属性 → 底下如果有「解除锁定」，勾上、确定。
-     所有文件都做一遍，不用管哪个是 `.vbs` 哪个是 `.ps1`。
-   - 如果没有「解除锁定」这一项却仍然被拦：弹窗里点「更多信息」，再点「仍要运行」。
-   - Win11 默认不显示扩展名，文件夹里看到的是 `start-token-counter` 而不是
-     `start-token-counter.vbs`。想看清扩展名：资源管理器 → 查看 → 显示 → 文件扩展名。
+## Installation
 
-2. 把整个 `dsh-token-counter` 文件夹放到一个固定位置，比如 `D:\tools\dsh-token-counter`。
-   路径不敏感，中文和空格都行。**但必须是能写的目录**——别放在「Program Files」这类要管理员权限的
-   地方，它要在自己这个文件夹里写记录和日志。
+1. **Unblock the files before running them** — do not skip this.
+   - Do not run it straight from the zip viewer; that extracts to a temp folder and every path gets mangled.
+     Extract the whole folder to disk first.
+   - Files downloaded from the internet carry a "from the internet" mark. Without unblocking, double-clicking
+     triggers "Windows protected your PC". Fix: select all files in the folder → right-click → Properties →
+     tick *Unblock* at the bottom → OK. Do this for every file; it does not matter which is `.vbs` and which is `.ps1`.
+   - If there is no *Unblock* checkbox and you are still blocked: click *More info* in the dialog, then *Run anyway*.
+   - Windows 11 hides extensions by default, so you will see `start-token-counter` instead of
+     `start-token-counter.vbs`. To show them: Explorer → View → Show → File name extensions.
 
-   位置尽量定下来。挪动之后程序本身还能跑，但第 5 步的自启快捷方式会失效
-   （症状是下次开机图标不出现），把启动文件夹里那个快捷方式删掉重建即可。
+2. Put the whole `dsh-token-counter` folder somewhere permanent, for example `D:\tools\dsh-token-counter`.
+   The path does not matter — spaces and non-ASCII characters are fine. **But it must be writable**: do not put it under
+   `Program Files` or anywhere that needs administrator rights, because the tool writes its data and logs inside its own folder.
 
-3. 双击启动器（`start-token-counter`）。托盘出现图标就算装好，首次启动等一两秒。
+   Try to settle on a location. Moving the folder later still works, but the autostart shortcut from step 5 breaks
+   (the symptom is that no icon appears after a reboot); delete that shortcut and recreate it.
 
-4. 图标没出现或者找不到：
-   - 先点任务栏右下角那个向上的小箭头（∧），那是「隐藏的图标」面板，多半在里面。
-   - 想让它常驻：设置 → 个性化 → 任务栏 → 其他系统托盘图标，把开关打开。
-   - **注意**：Windows 是按程序来记托盘项的，这两个工具都是 PowerShell 跑的，
-     所以在那个列表里它显示成「Windows PowerShell」，不叫「大模型用量计数器」。
-     认它要靠外观：偏绿的小圆圈里面是数字。
+3. Double-click the launcher (`start-token-counter`). The icon appearing in the tray means it is installed; give it a second or two.
 
-5. 开机自动跑，两种办法任选一种：
+4. No icon, or you cannot find it:
+   - Click the little up arrow (∧) at the bottom-right of the taskbar: that is the hidden-icons panel, and it is usually in there.
+   - To keep it visible: Settings → Personalization → Taskbar → Other system tray icons, and turn it on.
+   - **Note**: Windows remembers tray items per program, and both tools run under PowerShell, so it shows up in that list
+     as "Windows PowerShell", not as this tool's name. Recognise it by its look: a greenish circle with a number.
 
-   **办法 A**：右键启动器 → 发送到 → 桌面快捷方式；按 `Win + R` 输入 `shell:startup` 回车，
-   打开「启动」文件夹；把桌面那个快捷方式剪贴进去。
+5. To start it automatically at logon, pick either way:
 
-   **办法 B**：在「启动」文件夹里右键 → 新建 → 快捷方式，位置填下面这行
-   （路径换成你实际的，引号要留着，路径有空格时尤其需要）：
+   **Way A**: right-click the launcher → Send to → Desktop (create shortcut); press `Win + R`, type `shell:startup`,
+   press Enter, and paste the shortcut into that Startup folder.
+
+   **Way B**: in the Startup folder, right-click → New → Shortcut, and use this as the location
+   (replace the path with yours; keep the quotes, especially if the path has spaces):
 
    ```
    wscript.exe "D:\tools\dsh-token-counter\start-token-counter.vbs"
    ```
 
-   **建议设上自启**，原因见下面「已知限制」。
+   **Autostart is recommended** — see "Known limitations" below.
 
-### 桌面图标
+### Desktop icon
 
-桌面快捷方式默认显示的是 Windows 脚本的图标，三个工具长得一样，认不出来。
-想让它们跟托盘那个圆点一致：右键快捷方式 → 属性 → 更改图标 → 选本文件夹里的 `icon.ico`。
+A shortcut to a script shows the generic Windows script icon by default, and all three tools look identical.
+To make it match the tray dot: right-click the shortcut → Properties → Change Icon → pick `icon.ico` in this folder.
 
-## 怎么用
+## Usage
 
-- 平时不用管，它每分钟自己读一次。
-- 想看细节就右键图标点「明细」。
-- 同一时间只会跑一个：重复双击，多出来的那个会自己退出。
-- 占内存大约 100 到 150 兆。
+- Leave it alone; it reads once a minute.
+- For details, right-click the icon and choose *Details*.
+- Only one instance runs at a time: double-clicking again makes the extra one exit by itself.
+- It uses roughly 100–150 MB of memory.
 
-## 数字是什么口径
+## Under the hood
 
-- **合计 = 未缓存输入 + 输出 + 缓存读取。** 图标上那个数，就等于明细里那一行的「合计」。
-- 明细里五项分别是什么：
+- **It only reads the session usage cache DSH keeps locally** (uncompressed JSON), once a minute; it does not decompress the raw session records.
+- **Each session gets a baseline and deltas are accumulated**; if a cumulative value shrinks the session was rebuilt, so only the baseline is updated and nothing is added to the day.
+- **The first run takes the current values as the baseline**, otherwise the whole historical total would land on today.
+- **State is written to a temp file and then swapped in**; if it cannot be read, the remains are kept, a line goes into the log,
+  and the previous backup is restored. It sits at roughly 100–150 MB of memory.
 
-  | 项 | 含义 |
+## What the numbers mean
+
+- **Total = uncached input + output + cache reads.** The number on the tray icon is exactly the "total" row in the panel.
+- The five rows in the panel:
+
+  | Row | Meaning |
   | --- | --- |
-  | 输入 | 这次对话真正发给模型的、没被缓存命中的部分 |
-  | 输出 | 模型生成的 |
-  | 缓存读取 | 命中了缓存的输入，数量大但单价便宜得多 |
-  | 缓存写入 | 写入缓存的部分，DeepSeek 这边一直是 0，所以不计入合计 |
-  | 合计 | 前三项相加 |
+  | Input | What was actually sent to the model in this session and was not served from cache |
+  | Output | What the model generated |
+  | Cache reads | Input that hit the cache: a large count, but a much cheaper unit price |
+  | Cache writes | The part written into the cache. It has always been 0 on DeepSeek's side, so it is not in the total |
+  | Total | The first three added together |
 
-- 缓存读取这一项通常比其它几项大得多，但它的单价便宜得多，所以别只看总数。
-- 数值四舍五入：以「万」显示保留一位小数，以「亿」显示保留两位。
-- 「今天」按你本机的零点切换。
-- 这是本机 DSH 的用量，**不等于 DeepSeek 后台的账单**：后台还有错峰优惠，价目也会变，
-  你在别的客户端用同一个账号的消耗也不在这里。所以这里只报 token，不折算成钱。
-  适合拿它看趋势和相对量，不要当对账单用。
-- 数据来源是 DSH 在本机存的会话用量缓存，只读，不改动 DSH 的任何东西。
-  想自己核实：打开用户目录下的 `.dsh\storages\session_projcache\sessions` 这个文件夹，
-  里面每个 json 就是一路用量。这个目录不存在，就说明 DSH 没装好或者没跑过。
+- Cache reads are usually far larger than the other rows, but far cheaper per unit, so do not judge by the total alone.
+- Numbers are rounded: one decimal in units of 10,000, two decimals in units of 100 million.
+- "Today" switches at your machine's midnight.
+- This is local DSH usage and **is not your DeepSeek bill**: the backend has off-peak discounts, prices change,
+  and usage of the same account from other clients is not here. So it reports tokens only and never converts to money.
+  Use it for trends and relative volume, not as a statement.
+- The data source is the session usage cache DSH keeps locally. It is read-only; nothing in DSH is modified.
+  To verify it yourself: open the `.dsh\storages\session_projcache\sessions` folder in your user directory;
+  each JSON file there is one usage stream. If that folder does not exist, DSH either is not installed or has never run.
 
-## 第一次装完会看到什么
+## What you will see after a fresh install
 
-今天从零开始数，「昨日」要等第二天才会有数，刚装上时数字很小或者为 0。
+Today starts at zero and "yesterday" only gets a number on the second day, so at first the number is small or 0.
 
-怎么判断到底有没有读到 DSH 的数据：打开「明细」，看着那一分钟里「缓存读取」有没有往上涨。
-你在用 DSH 的时候它应该涨；钉住不动就是没读到，先去确认上面那个 `.dsh` 目录在不在。
+To tell whether it is actually reading DSH data: open *Details* and watch whether "cache reads" climbs within that minute.
+While you are using DSH it should climb; if it is nailed in place, nothing is being read — check that the `.dsh` folder above exists.
 
-## 已知限制
+## Known limitations
 
-- 按天记账是从这个程序开始运行那一刻算起的。程序没运行的那段时间，用量会漏记。
-  所以**建议设开机自启**（第 5 步）：它跟着开机起来就不会漏。
-  手动打开也能用，但从开机到你打开之间的用量会记不到。
-- 只统计本机的 DSH。多账号切换、其他客户端、网页版都不在这里面。
-- 电脑休眠期间不会读数，但 DSH 那时候通常也没在跑，所以影响不大。
+- Day-by-day accounting starts from the moment this program first runs. Usage while it is not running is missed.
+  That is why **autostart is recommended** (step 5): started with the machine, it misses nothing.
+  Running it by hand still works, but the usage between boot and the moment you start it is lost.
+- It only counts DSH on this machine. Switching accounts, other clients and the web version are not included.
+- It does not read while the machine is suspended, but DSH is normally not running then either, so the effect is small.
 
-## 重置
+## Reset
 
-右键退出，删掉 `state.json`，再重新启动。
+Right-click → Exit, delete `state.json`, start again.
 
-注意：重开之后它会以当时的累计值为新起点，也就是从那一刻重新开始记，之前的天数全部清零。
+Note: after that it takes the current cumulative values as its new baseline, i.e. it starts counting from that moment
+and all previous days go to zero.
 
-## 常见故障对照
+## Troubleshooting
 
-**图标不见了**
-先点任务栏的 ∧ 看隐藏面板；再检查 设置 → 个性化 → 任务栏 → 其他系统托盘图标
-（里面显示成 Windows PowerShell）。
+**The icon is gone**
+Click the ∧ arrow on the taskbar to check the hidden panel; then check Settings → Personalization → Taskbar →
+Other system tray icons (it appears there as Windows PowerShell).
 
-**数字一直是 0，或者不动**
-先确认 DSH 装了、用过了（看上面那个 `.dsh\storages\session_projcache\sessions` 在不在）。
-再看明细里「缓存读取」有没有涨。都不动就看日志。
+**The number is always 0, or never moves**
+First confirm DSH is installed and has been used (check whether the `.dsh\storages\session_projcache\sessions` folder exists).
+Then check whether "cache reads" in the panel climbs. If neither moves, look at the log.
 
-**开机后图标不出现，以前是好的**
-多半是挪过文件夹，自启快捷方式失效了，删掉重建。
+**The icon stopped appearing at logon although it used to work**
+Most likely the folder was moved and the autostart shortcut broke. Delete it and recreate it.
 
-**双击启动器没反应**
-先按第 1 步做解除锁定；再看杀毒软件是不是拦了 `.vbs`。
-手动跑一次：开始菜单搜 PowerShell 打开，粘贴下面这行回车，看有没有红字
-（执行策略要显式带上，直接右键「使用 PowerShell 运行」会因为策略被拦）：
+**Double-clicking the launcher does nothing**
+Do step 1 (unblocking) first, then check whether antivirus blocked the `.vbs`.
+Run it by hand: open PowerShell from the Start menu, paste the line below and press Enter, and see whether anything red appears
+(the execution policy has to be passed explicitly; right-clicking → "Run with PowerShell" gets blocked by policy):
 
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File "D:\tools\dsh-token-counter\token-counter.ps1" -Once
 ```
 
-## 日志怎么看
+## Reading the log
 
-`token-counter.log` 在工具文件夹里，双击就用记事本打开了。
-它很小（几十 KB 以内），删了会自动重建，跑一会儿才会出现。
+`token-counter.log` sits in the tool folder; double-clicking opens it in Notepad.
+It is small (tens of KB at most), is recreated if you delete it, and only appears after it has run for a moment.
 
-正常运行时里面基本只有几行 `tray started`；出现别的字样就把日志留着给我看。
-日志是空的又确实有问题，就走上面的常见故障对照。
+In normal operation it has little more than a few `tray started` lines. If anything else appears, keep the log.
+If the log is empty and something is still wrong, work through the troubleshooting section above.
 
-## 怎么删干净
+## Uninstalling completely
 
-1. 右键托盘图标 → 退出。
-   这一步别省。实测不退也能把文件夹删掉，但那个进程还在后台跑，
-   而且每隔几秒就找不到文件报一次错，你还得再去任务管理器结束它。先退出省事。
-2. 确认真的退干净：按 `Ctrl+Shift+Esc` 打开任务管理器，切到「详细信息」标签，
-   右键列标题 → 选择列 → 勾上「命令行」，找 `powershell.exe`，
-   看命令行里还有没有 `token-counter.ps1`。没有就算干净。
-   如果文件夹已经删了但进程还在：在任务管理器里结束那个 `powershell.exe`，或者重启一次电脑。
-3. 删掉整个 `dsh-token-counter` 文件夹。你的用量数据 `state.json` 也在里面，一起没了。
-4. 删掉「启动」文件夹里那个快捷方式（如果你设过自启）。`Win + R` 输入 `shell:startup` 回车就能打开。
-5. 如果你在「其他系统托盘图标」里动过开关，那里会留一条记录（记的是 PowerShell 这个程序，
-   不是本工具），不用特意清，不影响什么。
+1. Right-click the tray icon → Exit.
+   Do not skip this. Deleting the folder while it runs technically works, but the process keeps going in the background,
+   fails to find its files every few seconds, and you would have to kill it from Task Manager anyway.
+2. Confirm it is really gone: press `Ctrl+Shift+Esc` for Task Manager, switch to the *Details* tab, right-click a column header →
+   Select columns → tick *Command line*, find `powershell.exe`, and check whether `token-counter.ps1` still appears in a command line.
+   If the folder is already deleted but the process is still there: end that `powershell.exe` in Task Manager, or reboot.
+3. Delete the whole `dsh-token-counter` folder. Your usage data `state.json` is inside it and goes with it.
+4. Delete the Startup shortcut if you created one. `Win + R`, type `shell:startup`, press Enter.
+5. If you toggled it in "Other system tray icons", a record stays there (it records the PowerShell program, not this tool).
+   No need to clean it up; it does nothing.
 
-除此之外没改过系统别的东西：没有系统服务，没有安装程序，注册表里也只有上面第 5 条那个托盘开关记录。
-DSH 本身的数据一点没动。
+Nothing else on the system was changed: no services, no installer, and the only registry trace is the tray toggle from step 5.
+Nothing in DSH's own data is touched.
 
-## 怎么更新
+## Updating
 
-这个文件夹就是全部，没有自动更新。你自己留着新版本的话：
-先右键托盘图标退出，用新版本覆盖整个文件夹，再双击启动器。`state.json` 留着，历史数据不会丢。
+This folder is everything; there is no auto-update. If you keep a newer version: right-click the tray icon → Exit,
+overwrite the whole folder with the new version, and double-click the launcher again.
+Keep `state.json` and no history is lost.
 
-版本号在 README 第一行标题下面，也在 `token-counter.ps1` 开头的注释里
-（看注释要用记事本打开，直接双击 `.ps1` 会运行它）。
+The version number is under the title of this README, and in the comment at the top of `token-counter.ps1`
+(open it in Notepad — double-clicking a `.ps1` runs it).
 
+## The other two tools in this set
 
-## 文件都是干什么的
+- [Video Tab Counter](https://github.com/NutshellLee/video-tab-counter) — how many videos you finished today and how long they were
+- [Screen-On Time](https://github.com/NutshellLee/screen-time-counter) — how long your screen was on today
 
-| 文件 | 说明 |
+## Version history
+
+- **1.0** (2026-10-12) — first release: the tray icon shows today's total; the details panel switches between today / yesterday / the last 7 days and lists input, output, cache reads and cache writes.
+
+## What each file is
+
+| File | What it is |
 | --- | --- |
-| `token-counter.ps1` | 主程序 |
-| `start-token-counter.vbs` | 启动器，双击这个 |
-| `README.md` | 就是本文件 |
-| `AGENTS.md` | 给改代码的 AI 看的，普通使用可以不管 |
-| `LICENSE` | 许可 |
-| `state.json` / `*.log` | 运行后自动生成，可以随手删 |
+| `token-counter.ps1` | The main program |
+| `start-token-counter.vbs` | Launcher — double-click this one |
+| `README.md` / `README.zh-CN.md` | This document, in English and Chinese |
+| `AGENTS.md` | Notes for AI or developers changing the code; safe to ignore as a user |
+| `LICENSE` | License |
+| `state.json` / `*.log` | Created at runtime; safe to delete |
 
-想改代码、或者想知道这些数是从哪儿读的、为什么不能换个读法，看 [AGENTS.md](AGENTS.md)。
+To change the code, or to see where these numbers are read from and why the source cannot be swapped, read [AGENTS.md](AGENTS.md).
