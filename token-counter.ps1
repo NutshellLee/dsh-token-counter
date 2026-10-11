@@ -1,5 +1,5 @@
 ﻿# dsh-token-counter - DSH 大模型用量托盘计数器
-# 版本 1.0
+# 版本 1.1
 #
 # 托盘图标显示「今天」消耗的总 token 数（单位：万）。
 # 悬停显示今天 / 昨天的 输入、输出、缓存读取、合计。
@@ -20,6 +20,7 @@ param(
   [int]$IntervalSec = 60
 )
 
+$ToolVersion = '1.1'   # 版本号：第二行注释和 README 开头要跟它一致
 $ErrorActionPreference = 'Stop'
 $Root      = Split-Path -Parent $MyInvocation.MyCommand.Path
 $StatePath = Join-Path $Root 'state.json'
@@ -562,6 +563,19 @@ function Update-Tray {
   }
 }
 
+# 有人在自己文件夹里放一个 exit-request.txt，就正常退出：先结算存盘、删掉请求文件，再关。
+# 这样以后重启和更新都不用强杀进程（强杀会丢上一次存盘之后的那一段）。
+function Test-ExitRequested {
+  $flag = Join-Path $Root 'exit-request.txt'
+  if (-not (Test-Path $flag)) { return $false }
+  try { Remove-Item $flag -Force -ErrorAction SilentlyContinue } catch {}
+  Write-Log 'exit requested by flag file'
+  $script:Timer.Stop(); Save-State $script:State
+  $script:Ni.Visible = $false; $script:Ni.Dispose()
+  [System.Windows.Forms.Application]::Exit()
+  return $true
+}
+
 function Start-Tray {
   Initialize-WinForms
 
@@ -579,13 +593,13 @@ function Start-Tray {
   $miExit   = $menu.Items.Add('退出')
   $script:Ni.ContextMenuStrip = $menu
 
-  # 左键单击托盘图标开明细。已经开着就什么都不做——不重开也不收起来，
-  # 免得点一下先收再弹、看着像闪了一下。收起还是靠点面板外或右上角的叉。
+  # 左键单击托盘图标当开关用：点一下开，再点一下关。
+  # （鼠标按在托盘那一片不算「点到面板外」，所以不会被外面的规则先关掉。）
   $script:Ni.Add_MouseClick({
     param($s, $e)
     if ($e.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
     try {
-      if ($script:PanelForm -and -not $script:PanelForm.IsDisposed) { return }
+      if ($script:PanelForm -and -not $script:PanelForm.IsDisposed) { $script:PanelForm.Close(); return }
       Update-Tray
       Show-Panel $script:State (Get-Date)
     } catch { Write-Log "left click failed: $($_.Exception.Message)" }
@@ -603,10 +617,10 @@ function Start-Tray {
 
   $script:Timer = New-Object System.Windows.Forms.Timer
   $script:Timer.Interval = [int]($script:IntervalSec * 1000)
-  $script:Timer.Add_Tick({ Update-Tray })
+  $script:Timer.Add_Tick({ if (Test-ExitRequested) { return }; Update-Tray })
   $script:Timer.Start()
 
-  Write-Log "tray started, interval=$($script:IntervalSec)s"
+  Write-Log "tray started, version=$ToolVersion, interval=$($script:IntervalSec)s"
   Update-Tray
   [System.Windows.Forms.Application]::Run()
 }

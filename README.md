@@ -18,7 +18,7 @@ This little tool turns that into a single number in the Windows system tray.
 - **One number is enough**: the tray shows today's total, and hovering gives today and yesterday.
 - **Broken down**: input, output, cache reads and cache writes are listed separately, so the cache-read figure does not overwhelm you.
 
-Version 1.0 ｜ MIT license (see [LICENSE](LICENSE)) ｜ A personal tool; no promise it fits your setup
+Version 1.1 ｜ MIT license (see [LICENSE](LICENSE)) ｜ A personal tool; no promise it fits your setup
 
 ---
 
@@ -40,8 +40,8 @@ Version 1.0 ｜ MIT license (see [LICENSE](LICENSE)) ｜ A personal tool; no pro
 | Open folder | Opens the folder the tool lives in |
 | Exit | Quits |
 
-A left click on the tray icon also opens the details panel; clicking again while it is already open does nothing
-(it will not flash and pop again). To dismiss it, click outside the panel or hit the × in its top-right corner.
+A left click on the tray icon toggles the details panel: click to open it, click again to close it.
+You can also dismiss it by clicking outside the panel or hitting the × in its top-right corner.
 The right-click menu offers the same actions.
 
 ### The details panel
@@ -233,6 +233,7 @@ The version number is under the title of this README, and in the comment at the 
 
 ## Version history
 
+- **1.1** (2026-10-12) — the tray click is now a toggle: click to open, click again to close. The tool can also be asked to exit cleanly from outside, so restarts and updates no longer need a forced kill.
 - **1.0** (2026-10-12) — first release: the tray icon shows today's total; the details panel switches between today / yesterday / the last 7 days and lists input, output, cache reads and cache writes.
 
 ## What each file is

@@ -4,3 +4,5 @@ state.bak.json
 state.json.corrupt-*.json
 token-counter.log
 *.log
+exit-request.txt
+
