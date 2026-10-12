@@ -2,8 +2,9 @@
 
 **English** ｜ [简体中文](README.zh-CN.md)
 
-DeepSeek Harness shows you the usage of the current session, but not **how much you burned today, or how much yesterday**.
-This little tool turns that into a single number in the Windows system tray.
+A treadmill is compelling because it records numbers — work with no feedback is hard to stick with.
+
+To see how much you burned today you have to leave what you are doing, open a browser and dig through the official backend. This little tool turns that into a single number in the tray, there whenever you glance at it.
 
 ![Details panel (today)](docs/screenshot-today.png)
 
